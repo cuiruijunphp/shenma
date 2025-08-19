@@ -1,0 +1,13 @@
+{
+  "name": "shenma/import",
+  "description": "Excel upload and import to MySQL (shenma.keyword)",
+  "type": "project",
+  "require": {
+    "phpoffice/phpspreadsheet": "^1.29"
+  },
+  "config": {
+    "platform": {
+      "php": "7.4.0"
+    }
+  }
+} 

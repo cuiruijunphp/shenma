@@ -114,3 +114,53 @@ project/
 - **更新日期**: 2024年
 - **兼容性**: 支持现代浏览器（Chrome、Firefox、Safari、Edge）
 - **主要特性**: 双重搜索模式、智能关键词管理、12秒自动切换 
+
+## Excel 批量导入到数据库（PHP）
+
+本项目提供了一个PHP页面用于将Excel数据批量导入到数据库 `shenma` 的表 `keyword` 中。
+
+### 表结构
+- `id` (主键、自增)
+- `type` (类型，对应Sheet名称)
+- `keyword` (搜索关键词，对应A2-A21单元格的值)
+- `add_time` (添加时间)
+- `update_time` (更新时间)
+
+示例建表SQL参见 `upload.php` 页面底部提示。
+
+### 安装依赖
+1. 安装 Composer（如未安装，可访问 `https://getcomposer.org/`）
+2. 在项目根目录执行：
+```bash
+composer install
+```
+
+### 数据库配置
+编辑 `config.php`：
+```php
+return [
+    'db_host' => '127.0.0.1',
+    'db_port' => 3306,
+    'db_name' => 'shenma',
+    'db_user' => 'root',
+    'db_pass' => '',
+    'db_charset' => 'utf8mb4',
+];
+```
+
+### 使用方法
+1. 确保数据库和表已创建（或按照页面提示创建）
+2. 启动PHP内置服务器（或放置到您的Web服务器根目录）：
+```bash
+php -S 0.0.0.0:8000 | cat
+```
+3. 在浏览器访问 `http://localhost:8000/upload.php`
+4. 选择Excel文件（.xlsx/.xls/.csv），提交表单
+5. 系统会循环读取每个Sheet的A2到A21（20条），将每条记录插入到 `keyword` 表中（`type`=Sheet名，`keyword`=单元格值）
+
+### 注意事项
+- 仅处理每个Sheet的 `A2` 到 `A21`（最多20条）。空单元格将被跳过。
+- 导入过程在数据库事务中执行，任一错误会回滚。
+- 建议表的字符集使用 `utf8mb4`。
+- 如果Excel中存在日期/数值单元格，已使用 `getFormattedValue()` 读取格式化值。
+- 大文件导入可考虑分块、提高PHP内存限制与执行时间。 
