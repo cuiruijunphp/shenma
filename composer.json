@@ -3,7 +3,8 @@
   "description": "Excel upload and import to MySQL (shenma.keyword)",
   "type": "project",
   "require": {
-    "phpoffice/phpspreadsheet": "^1.29"
+    "phpoffice/phpspreadsheet": "^1.29",
+    "predis/predis": "^2.2"
   },
   "config": {
     "platform": {

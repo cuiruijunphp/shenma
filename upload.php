@@ -30,7 +30,7 @@ class ColumnRowFilter implements IReadFilter {
     /** @var string[] */
     private array $columns;
 
-    public function __construct(int $startRow = 2, int $endRow = 21, array $columns = ['A']) {
+    public function __construct(int $startRow = 2, int $endRow = 1001, array $columns = ['A']) {
         $this->startRow = $startRow;
         $this->endRow = $endRow;
         $this->columns = $columns;
@@ -108,7 +108,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if ($row === null) { continue; }
                         $lineNum++;
                         if ($lineNum === 1) { continue; } // 跳过第一行
-                        if ($lineNum > 21) { break; }
+                        if ($lineNum > 1001) { break; }
                         $value = '';
                         if (is_array($row) && count($row) > 0) {
                             $value = trim((string)$row[0]); // 第一列=A列
@@ -130,7 +130,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if (method_exists($reader, 'setReadEmptyCells')) {
                         $reader->setReadEmptyCells(false);
                     }
-                    $filter = new ColumnRowFilter(2, 21, ['A']);
+                    $filter = new ColumnRowFilter(2, 1001, ['A']);
                     $reader->setReadFilter($filter);
 
                     // 获取所有sheet名称，避免一次性加载整本表
@@ -142,7 +142,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $sheet = $spreadsheet->getSheet(0);
 
                         $inserted = 0;
-                        for ($row = 2; $row <= 21; $row++) {
+                        for ($row = 2; $row <= 1001; $row++) {
                             $cell = $sheet->getCell('A' . $row);
                             $value = trim((string)$cell->getFormattedValue());
                             if ($value === '') { continue; }

@@ -1,129 +1,28 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>神马搜索工具</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 20px;
-            font-family: Arial, sans-serif;
-            background-color: #f5f5f5;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-        .search-section {
-            padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            text-align: center;
-        }
-        .search-box {
-            display: flex;
-            max-width: 600px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 25px;
-            overflow: hidden;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-        }
-        .search-input {
-            flex: 1;
-            padding: 15px 20px;
-            border: none;
-            outline: none;
-            font-size: 16px;
-            background: transparent;
-        }
-        .search-btn {
-            padding: 15px 25px;
-            background: #4CAF50;
-            color: white;
-            border: none;
-            cursor: pointer;
-            font-size: 16px;
-            transition: background 0.3s;
-        }
-        .search-btn:hover {
-            background: #45a049;
-        }
-        .status-info {
-            margin-top: 15px;
-            font-size: 14px;
-            opacity: 0.9;
-        }
-        .content-section {
-            min-height: 600px;
-            padding: 20px;
-        }
-        .loading {
-            text-align: center;
-            padding: 50px;
-            color: #666;
-        }
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #3498db;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .timer {
-            font-size: 18px;
-            font-weight: bold;
-            color: #e74c3c;
-        }
-        .auto-mode {
-            background: rgba(255,255,255,0.2);
-            padding: 10px 20px;
-            border-radius: 20px;
-            margin-top: 15px;
-            display: inline-block;
-        }
-        .auto-mode input[type="checkbox"] {
-            margin-right: 8px;
-        }
-    </style>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>神马搜索工具</title>
+	<style>
+		body { margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f5f5f5; }
+		.container { max-width: 1200px; margin: 0 auto; background: white; min-height: 100vh; }
+		.content-section { min-height: 100vh; padding: 0; }
+		.loading { text-align: center; padding: 50px; color: #666; }
+		.spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 80px auto 20px; }
+		@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+		iframe { display:block; width:100%; height: calc(100vh); border: none; }
+	</style>
 </head>
 <body>
-    <div class="container">
-        <div class="search-section">
-            <h1>神马搜索工具</h1>
-            <div class="search-box">
-                <input type="text" class="search-input" id="searchInput" placeholder="请输入搜索关键词..." autocomplete="off">
-                <button class="search-btn" id="searchBtn">搜索</button>
-            </div>
-            <div class="status-info">
-                <div>当前关键词: <span id="currentKeyword">-</span></div>
-                <div>剩余时间: <span id="timer" class="timer">-</span></div>
-                <div>进度: <span id="progress">0/23</span></div>
-            </div>
-            <div class="auto-mode">
-                <input type="checkbox" id="autoMode" checked>
-                <label for="autoMode">自动模式</label>
-            </div>
-        </div>
-        <div class="content-section" id="contentSection">
-            <div class="loading">
-                <div class="spinner"></div>
-                <p>等待搜索开始...</p>
-            </div>
-        </div>
-    </div>
-
-    <script src="script.js"></script>
+	<div class="container">
+		<div class="content-section" id="contentSection">
+			<div class="loading">
+				<div class="spinner"></div>
+				<p>正在加载搜索结果...</p>
+			</div>
+		</div>
+	</div>
+	<script src="script.js"></script>
 </body>
 </html> 

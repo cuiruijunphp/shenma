@@ -6,3 +6,4 @@ vendor/
 
 .htaccess
 .user.ini
+config.php
