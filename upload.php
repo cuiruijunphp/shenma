@@ -9,7 +9,7 @@ error_reporting(E_ALL);
 
 // 提升内存与执行时间配额，避免大型文件报错
 ini_set('memory_limit', '512M');
-set_time_limit(300);
+set_time_limit(600);
 
 date_default_timezone_set('Asia/Shanghai');
 
@@ -23,14 +23,14 @@ require $vendorAutoload;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 
-// 仅读取指定列与行的过滤器
+// 仅读取指定列与行的过滤器（保留以备需要）
 class ColumnRowFilter implements IReadFilter {
     private int $startRow;
     private int $endRow;
     /** @var string[] */
     private array $columns;
 
-    public function __construct(int $startRow = 2, int $endRow = 1001, array $columns = ['A']) {
+    public function __construct(int $startRow = 2, int $endRow = 1048576, array $columns = ['A']) {
         $this->startRow = $startRow;
         $this->endRow = $endRow;
         $this->columns = $columns;
@@ -62,7 +62,7 @@ if (!file_exists($configPath)) {
 }
 $dbConfig = require $configPath;
 
-// 创建PDO连接
+// 创建PDO连接（父进程/顺序模式使用；多进程子进程会各自重连）
 $dsn = sprintf('mysql:host=%s;port=%d;dbname=%s;charset=%s',
     $dbConfig['db_host'],
     (int)$dbConfig['db_port'],
@@ -82,6 +82,79 @@ try {
 $messages = [];
 $results = [];
 
+// 工具函数：处理一个sheet（顺序模式使用）
+$processSheetSequential = function(string $filePath, string $sheetName, PDO $pdo) use (&$results) {
+    $reader = IOFactory::createReader(pathinfo($filePath, PATHINFO_EXTENSION) === 'xls' ? 'Xls' : 'Xlsx');
+    $reader->setReadDataOnly(true);
+    $reader->setLoadSheetsOnly([$sheetName]);
+    $spreadsheet = $reader->load($filePath);
+    $sheet = $spreadsheet->getSheet(0);
+
+    $lastRow = $sheet->getHighestDataRow('A');
+    $inserted = 0;
+
+    $pdo->beginTransaction();
+    $stmt = $pdo->prepare('INSERT INTO `keyword` (`type`, `keyword`, `add_time`, `update_time`) VALUES (:type, :keyword, NOW(), NOW())');
+    for ($row = 2; $row <= $lastRow; $row++) {
+        $value = trim((string)$sheet->getCell('A' . $row)->getFormattedValue());
+        if ($value === '') { continue; }
+        $stmt->execute([
+            ':type' => $sheetName,
+            ':keyword' => $value,
+        ]);
+        $inserted++;
+    }
+    $pdo->commit();
+
+    $results[] = [ 'sheet' => $sheetName, 'inserted' => $inserted ];
+
+    $spreadsheet->disconnectWorksheets();
+    unset($sheet, $spreadsheet);
+    if (function_exists('gc_collect_cycles')) gc_collect_cycles();
+};
+
+// 工具函数：子进程处理一个sheet（多进程模式）
+$processSheetChild = function(string $filePath, string $sheetName, array $dbConfig) {
+    try {
+        $dsn = sprintf('mysql:host=%s;port=%d;dbname=%s;charset=%s',
+            $dbConfig['db_host'], (int)$dbConfig['db_port'], $dbConfig['db_name'], $dbConfig['db_charset']
+        );
+        $pdoChild = new PDO($dsn, $dbConfig['db_user'], $dbConfig['db_pass'], [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES {$dbConfig['db_charset']}"
+        ]);
+
+        $reader = IOFactory::createReader(pathinfo($filePath, PATHINFO_EXTENSION) === 'xls' ? 'Xls' : 'Xlsx');
+        $reader->setReadDataOnly(true);
+        $reader->setLoadSheetsOnly([$sheetName]);
+        $spreadsheet = $reader->load($filePath);
+        $sheet = $spreadsheet->getSheet(0);
+
+        $lastRow = $sheet->getHighestDataRow('A');
+        $pdoChild->beginTransaction();
+        $stmt = $pdoChild->prepare('INSERT INTO `keyword` (`type`, `keyword`, `add_time`, `update_time`) VALUES (:type, :keyword, NOW(), NOW())');
+        for ($row = 2; $row <= $lastRow; $row++) {
+            $value = trim((string)$sheet->getCell('A' . $row)->getFormattedValue());
+            if ($value === '') { continue; }
+            $stmt->execute([
+                ':type' => $sheetName,
+                ':keyword' => $value,
+            ]);
+        }
+        $pdoChild->commit();
+
+        $spreadsheet->disconnectWorksheets();
+        unset($sheet, $spreadsheet, $stmt, $pdoChild);
+        if (function_exists('gc_collect_cycles')) gc_collect_cycles();
+        exit(0);
+    } catch (Throwable $e) {
+        // 子进程失败直接退出非零码
+        file_put_contents('php://stderr', "[child] sheet {$sheetName} failed: " . $e->getMessage() . "\n");
+        exit(2);
+    }
+};
+
 // 处理上传
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!isset($_FILES['excel']) || $_FILES['excel']['error'] !== UPLOAD_ERR_OK) {
@@ -94,80 +167,94 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $messages[] = '仅支持上传 .xlsx / .xls / .csv 文件。';
         } else {
             try {
-                $pdo->beginTransaction();
-                $stmt = $pdo->prepare('INSERT INTO `keyword` (`type`, `keyword`, `add_time`, `update_time`) VALUES (:type, :keyword, NOW(), NOW())');
-
                 if ($ext === 'csv') {
-                    // CSV: 作为单sheet处理，读取第2到第21行的第一列
+                    // CSV 顺序读取：取第一列，从第2行到最后一个非空的行（中间空行跳过）
                     $type = pathinfo($origName, PATHINFO_FILENAME) . ' (CSV)';
-                    $inserted = 0;
                     $file = new SplFileObject($tmpName, 'r');
-                    $file->setFlags(SplFileObject::READ_CSV | SplFileObject::SKIP_EMPTY | SplFileObject::DROP_NEW_LINE);
+                    $file->setFlags(SplFileObject::READ_CSV | SplFileObject::DROP_NEW_LINE);
+                    $rows = [];
                     $lineNum = 0;
+                    $lastNonEmpty = 0;
                     foreach ($file as $row) {
                         if ($row === null) { continue; }
                         $lineNum++;
-                        if ($lineNum === 1) { continue; } // 跳过第一行
-                        if ($lineNum > 1001) { break; }
-                        $value = '';
+                        if ($lineNum < 2) { continue; } // 跳过首行
+                        $val = '';
                         if (is_array($row) && count($row) > 0) {
-                            $value = trim((string)$row[0]); // 第一列=A列
+                            $val = trim((string)$row[0]);
                         } else if (is_string($row)) {
-                            $value = trim($row);
+                            $val = trim($row);
                         }
-                        if ($value === '') { continue; }
-                        $stmt->execute([
-                            ':type' => $type,
-                            ':keyword' => $value,
-                        ]);
-                        $inserted++;
+                        $rows[$lineNum] = $val;
+                        if ($val !== '') { $lastNonEmpty = $lineNum; }
                     }
-                    $results[] = [ 'sheet' => $type, 'inserted' => $inserted ];
-                } else {
-                    // XLSX/XLS: 使用过滤器仅读取A列与A2-A21，并逐sheet加载释放
-                    $reader = IOFactory::createReader($ext === 'xls' ? 'Xls' : 'Xlsx');
-                    $reader->setReadDataOnly(true);
-                    if (method_exists($reader, 'setReadEmptyCells')) {
-                        $reader->setReadEmptyCells(false);
-                    }
-                    $filter = new ColumnRowFilter(2, 1001, ['A']);
-                    $reader->setReadFilter($filter);
-
-                    // 获取所有sheet名称，避免一次性加载整本表
-                    $sheetNames = $reader->listWorksheetNames($tmpName);
-
-                    foreach ($sheetNames as $sheetName) {
-                        $reader->setLoadSheetsOnly([$sheetName]);
-                        $spreadsheet = $reader->load($tmpName);
-                        $sheet = $spreadsheet->getSheet(0);
-
+                    if ($lastNonEmpty >= 2) {
+                        $pdo->beginTransaction();
+                        $stmt = $pdo->prepare('INSERT INTO `keyword` (`type`, `keyword`, `add_time`, `update_time`) VALUES (:type, :keyword, NOW(), NOW())');
                         $inserted = 0;
-                        for ($row = 2; $row <= 1001; $row++) {
-                            $cell = $sheet->getCell('A' . $row);
-                            $value = trim((string)$cell->getFormattedValue());
-                            if ($value === '') { continue; }
-                            $stmt->execute([
-                                ':type' => $sheetName,
-                                ':keyword' => $value,
-                            ]);
+                        for ($ln = 2; $ln <= $lastNonEmpty; $ln++) {
+                            $val = $rows[$ln] ?? '';
+                            if ($val === '') { continue; }
+                            $stmt->execute([':type' => $type, ':keyword' => $val]);
                             $inserted++;
                         }
+                        $pdo->commit();
+                        $results[] = [ 'sheet' => $type, 'inserted' => $inserted ];
+                    }
+                } else {
+                    // XLSX/XLS：按sheet并发（若支持pcntl），从A2读取到最后非空行
+                    $reader = IOFactory::createReader($ext === 'xls' ? 'Xls' : 'Xlsx');
+                    $reader->setReadDataOnly(true);
+                    $sheetNames = $reader->listWorksheetNames($tmpName);
 
-                        $results[] = [ 'sheet' => $sheetName, 'inserted' => $inserted ];
+                    $canFork = function_exists('pcntl_fork') && stripos(PHP_OS_FAMILY, 'Windows') === false;
+                    $maxChildren = 4; // 并发子进程数
+                    $children = [];
 
-                        // 释放内存
-                        $spreadsheet->disconnectWorksheets();
-                        unset($sheet, $spreadsheet);
-                        gc_collect_cycles();
+                    if ($canFork) {
+                        foreach ($sheetNames as $sheetName) {
+                            // 控制并发
+                            while (count($children) >= $maxChildren) {
+                                $status = 0;
+                                $pid = pcntl_wait($status);
+                                if ($pid > 0) {
+                                    unset($children[$pid]);
+                                }
+                            }
+                            $pid = pcntl_fork();
+                            if ($pid === -1) {
+                                // fork失败，回退顺序
+                                $canFork = false;
+                                break;
+                            } elseif ($pid === 0) {
+                                // 子进程
+                                $processSheetChild($tmpName, $sheetName, $dbConfig);
+                                // 不达此行
+                            } else {
+                                // 父进程记录子进程
+                                $children[$pid] = true;
+                            }
+                        }
+                        // 等待剩余子进程
+                        while (count($children) > 0) {
+                            $status = 0;
+                            $pid = pcntl_wait($status);
+                            if ($pid > 0) {
+                                unset($children[$pid]);
+                            }
+                        }
+                        $messages[] = '多进程导入完成。';
+                    }
+
+                    if (!$canFork) {
+                        // 顺序处理所有sheet
+                        foreach ($sheetNames as $sheetName) {
+                            $processSheetSequential($tmpName, $sheetName, $pdo);
+                        }
+                        $messages[] = '顺序导入完成。';
                     }
                 }
-
-                $pdo->commit();
-                $messages[] = '导入完成。';
             } catch (Throwable $e) {
-                if ($pdo->inTransaction()) {
-                    $pdo->rollBack();
-                }
                 $messages[] = '导入失败: ' . htmlspecialchars($e->getMessage());
             }
         }
@@ -204,7 +291,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <div class="card">
     <div class="card-header">
         <h2>Excel 批量导入到数据库：shenma.keyword</h2>
-        <div style="font-size:13px;opacity:0.9;">每个Sheet读取A2到A21（20行），Sheet名作type，单元格值作keyword</div>
+        <div style="font-size:13px;opacity:0.9;">每个Sheet读取A2到最后一个有值的行，Sheet名作type，单元格值作keyword；支持多进程。</div>
     </div>
     <div class="card-body">
         <form method="post" enctype="multipart/form-data">
