@@ -1,6 +1,6 @@
 <?php
 // cron_refresh_keywords.php
-// 计划任务：每天 00:30 执行，将 MySQL 中 is_read=0 的关键词分批（每批1000，共10批）写入 Redis 列表 keyword_list
+// 计划任务：每天 00:30 执行，将 MySQL 中 is_read=0 的关键词分批（每批1000，共10批）写入 Redis 列表 keyword_list，并标记 is_read=1
 
 declare(strict_types=1);
 ini_set('display_errors', '1');
@@ -76,7 +76,6 @@ try {
 $limitPerBatch = 1000;
 $maxBatches = 10; // 共 10 批
 $totalPushed = 0;
-$seen = [];
 
 // 清空旧列表（避免混入历史数据）
 try {
@@ -92,7 +91,8 @@ try {
 
 for ($batch = 0; $batch < $maxBatches; $batch++) {
     $offset = $batch * $limitPerBatch;
-    $sql = 'SELECT `keyword` FROM `keyword` WHERE `keyword` <> "" AND `is_read` = 0 ORDER BY `id` DESC LIMIT :limit OFFSET :offset';
+    // 同时查询 id 与 keyword，便于回写 is_read
+    $sql = 'SELECT `id`, `keyword` FROM `keyword` WHERE `keyword` <> "" AND `is_read` = 0 ORDER BY `id` DESC LIMIT :limit OFFSET :offset';
     try {
         $stmt = $pdo->prepare($sql);
         $stmt->bindValue(':limit', $limitPerBatch, PDO::PARAM_INT);
@@ -109,18 +109,18 @@ for ($batch = 0; $batch < $maxBatches; $batch++) {
         break;
     }
 
-    // 清洗 & 去重（本次运行内）
+    // 构造推送数据与ID集合（不去重，保持与回写一致）
     $batchValues = [];
+    $idsToUpdate = [];
     foreach ($rows as $r) {
         $kw = trim((string)$r['keyword']);
         if ($kw === '') { continue; }
-        if (isset($seen[$kw])) { continue; }
-        $seen[$kw] = true;
         $batchValues[] = $kw;
+        $idsToUpdate[] = (int)$r['id'];
     }
 
     if (count($batchValues) === 0) {
-        logInfo("第 {$batch} 批均为重复/空，跳过");
+        logInfo("第 {$batch} 批均为空，跳过");
         continue;
     }
 
@@ -131,11 +131,9 @@ for ($batch = 0; $batch < $maxBatches; $batch++) {
         for ($i = 0; $i < count($batchValues); $i += $chunkSize) {
             $chunk = array_slice($batchValues, $i, $chunkSize);
             if ($redisClient instanceof Redis) {
-                // ext-redis 支持变参
                 $args = array_merge(['keyword_list'], $chunk);
                 call_user_func_array([$redisClient, 'rPush'], $args);
             } else {
-                // Predis 逐条/分片推送
                 foreach ($chunk as $val) {
                     $redisClient->rpush('keyword_list', [$val]);
                 }
@@ -147,6 +145,22 @@ for ($batch = 0; $batch < $maxBatches; $batch++) {
     } catch (Throwable $e) {
         fwrite(STDERR, "[ERROR] 第 {$batch} 批写入 Redis 失败: {$e->getMessage()}\n");
         break;
+    }
+
+    // 将本批写入Redis的数据在数据库中标记为 is_read=1
+    if ($pushed > 0 && count($idsToUpdate) > 0) {
+        try {
+            $idsChunkSize = 1000;
+            foreach (array_chunk($idsToUpdate, $idsChunkSize) as $idsChunk) {
+                $placeholders = rtrim(str_repeat('?,', count($idsChunk)), ',');
+                $sqlUpdate = "UPDATE `keyword` SET `is_read` = 1, `update_time` = CURRENT_TIMESTAMP WHERE `is_read` = 0 AND `id` IN ($placeholders)";
+                $stmtUp = $pdo->prepare($sqlUpdate);
+                $stmtUp->execute($idsChunk);
+            }
+            logInfo("第 {$batch} 批已标记 is_read=1: " . count($idsToUpdate) . " 条");
+        } catch (Throwable $e) {
+            fwrite(STDERR, "[WARN] 第 {$batch} 批标记 is_read 失败: {$e->getMessage()}\n");
+        }
     }
 }
 
