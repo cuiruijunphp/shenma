@@ -9,7 +9,7 @@ error_reporting(E_ALL);
 
 // 提升内存与执行时间配额，避免大型文件报错
 ini_set('memory_limit', '512M');
-set_time_limit(600);
+set_time_limit(0);
 
 date_default_timezone_set('Asia/Shanghai');
 
@@ -167,6 +167,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $messages[] = '仅支持上传 .xlsx / .xls / .csv 文件。';
         } else {
             try {
+                // 全量导入前清空表
+                $pdo->exec('TRUNCATE TABLE `keyword`');
                 if ($ext === 'csv') {
                     // CSV 顺序读取：取第一列，从第2行到最后一个非空的行（中间空行跳过）
                     $type = pathinfo($origName, PATHINFO_FILENAME) . ' (CSV)';
